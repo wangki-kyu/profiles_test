@@ -1,23 +1,23 @@
 //================================================================================
-// Copyright (c) 2013 ~ 2022. HyungKi Jeong(clonextop@gmail.com)
+// Copyright (c) 2013 ~ 2026. HyungKi Jeong(clonextop@gmail.com)
 // Freely available under the terms of the 3-Clause BSD License
 // (https://opensource.org/licenses/BSD-3-Clause)
-// 
+//
 // Redistribution and use in source and binary forms,
 // with or without modification, are permitted provided
 // that the following conditions are met:
-// 
+//
 // 1. Redistributions of source code must retain the above copyright notice,
 //    this list of conditions and the following disclaimer.
-// 
+//
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
 //    and/or other materials provided with the distribution.
-// 
+//
 // 3. Neither the name of the copyright holder nor the names of its contributors
 //    may be used to endorse or promote products derived from this software
 //    without specific prior written permission.
-// 
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 // AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
 // THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -29,9 +29,9 @@
 // STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 // ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
 // OF SUCH DAMAGE.
-// 
+//
 // Title : Virtual FPGA Starter Kit
-// Rev.  : 1/2/2022 Sun (clonextop@gmail.com)
+// Rev.  : 8/23/2026 Sun (woojun)
 //================================================================================
 `timescale 1ns/1ns
 `include "template/StarterKit/includes.svh"
@@ -128,19 +128,108 @@ reg		[7:0]	led_data;
 
 assign	LED_pins	= led_data;
 
-// implementation ------------------------------------------------------------
-always@(posedge CLK) begin
-	if(!nRST) begin
-		t_count		<= 'd0;
-		led_data	<= 'd0;
+
+//// APB slave bus (base address : 0x00020000 ~ 0x0002FFFF, search keywords on google : "APB protocol filetype:pdf")
+/*output						S_PCLK,					// slave clock output
+output						S_PRESETn,				// slave reset (active low)
+input						S_PSEL,					// select
+input						S_PENABLE,				// enable
+input						S_PWRITE,				// write enable
+input	[15:0]				S_PADDR,				// address
+input	[31:0]				S_PWDATA,				// write data
+output	[31:0]				S_PRDATA,				// read data
+output						S_PREADY,				// ready
+output						S_PSLVERR,				// slave error
+ */
+
+// apb test 하기
+assign S_PCLK = CLK;
+assign S_PRESETn = nRST;
+assign S_PREADY = 1'b1;
+assign S_PSLVERR = 1'b0;
+
+always@(posedge CLK or negedge nRST) begin
+	if (!nRST) begin
+		led_data = 8'h00;	// 0으로 초기화...
+	end
+
+	if (S_PSEL && S_PENABLE && S_PWRITE) begin
+		if (S_PADDR == 16'h0000) begin
+			led_data <= S_PWDATA[7:0];
+		end
 
 	end
+
+	// S_PSEL, S_PENABLE 이 1이면?
+end
+
+
+// 기본 출력 핀 제어
+assign TFT_PCLK = CLK;     // 10MHz 픽셀 클럭 전달
+assign TFT_DISP = 1'b1;    // LCD 화면 활성화 (Active High)
+
+// 타이밍 파라미터 정의
+localparam H_ACTIVE = 480;
+localparam H_FP     = 8;
+localparam H_SYNC   = 4;
+localparam H_BP     = 43;
+localparam H_TOTAL  = H_ACTIVE + H_FP + H_SYNC + H_BP; // 535
+
+localparam V_ACTIVE = 272;
+localparam V_FP     = 4;
+localparam V_SYNC   = 4;
+localparam V_BP     = 12;
+localparam V_TOTAL  = V_ACTIVE + V_FP + V_SYNC + V_BP; // 292
+
+// 가로/세로 위치 카운터
+reg [9:0] h_cnt;
+reg [9:0] v_cnt;
+
+always @(posedge CLK or negedge nRST) begin   // clk이 0 -> 1로 올라가는 시점이나, 리셋 신호가 1 -> 0으로 떨어지는 시점에만 실행되는 로직
+	if (!nRST) begin
+		h_cnt <= 10'd0;
+		v_cnt <= 10'd0;
+	end
 	else begin
-		t_count		<= t_count + 1'b1;
-		if (t_count == 'd0) begin
-			led_data	<= led_data + 1'b1;
+		if (h_cnt < H_TOTAL - 1) begin
+			h_cnt <= h_cnt + 1'b1;
+		end
+		else begin
+			h_cnt <= 10'd0;
+			if (v_cnt < V_TOTAL - 1)
+				v_cnt <= v_cnt + 1'b1;
+			else
+				v_cnt <= 10'd0;
 		end
 	end
 end
+
+// 제어 신호 생성
+assign TFT_DE    = (h_cnt < H_ACTIVE) && (v_cnt < V_ACTIVE);
+assign TFT_HSYNC = ~((h_cnt >= H_ACTIVE + H_FP) && (h_cnt < H_ACTIVE + H_FP + H_SYNC));
+assign TFT_VSYNC = ~((v_cnt >= V_ACTIVE + V_FP) && (v_cnt < V_ACTIVE + V_FP + V_SYNC));
+
+// 테스트 패턴 (Red, Green, Blue 3색 컬러바)
+assign TFT_RGB = (TFT_DE) ? (
+	(h_cnt < 160) ? 24'hFF0000 : // 왼쪽: Red
+	(h_cnt < 320) ? 24'h00FF00 : // 중간: Green
+	24'h0000FF   // 오른쪽: Blue
+) : 24'h000000;
+
+
+// implementation ------------------------------------------------------------
+/*always@(posedge CLK) begin
+if(!nRST) begin
+	t_count		<= 'd0;
+	led_data	<= 'd0;
+ 
+end
+else begin
+	t_count		<= t_count + 1'b1;
+	if (t_count == 'd0) begin
+		led_data	<= led_data + 1'b1;
+	end
+end
+end*/
 
 endmodule
