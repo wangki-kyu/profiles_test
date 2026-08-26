@@ -31,7 +31,7 @@
 // OF SUCH DAMAGE.
 //
 // Title : Virtual FPGA Starter Kit
-// Rev.  : 8/23/2026 Sun (woojun)
+// Rev.  : 8/26/2026 Wed (rladn)
 //================================================================================
 `timescale 1ns/1ns
 `include "template/StarterKit/includes.svh"
@@ -142,26 +142,94 @@ output						S_PREADY,				// ready
 output						S_PSLVERR,				// slave error
  */
 
-// apb test 하기
+// ============== APB Slave Bus ================
+reg [31:0] reg_addr_low;	// 0x00: DMA 물리 주소 Low
+reg [31:0] reg_addr_high; 	// 0x04: DMA 물리 주소 High
+reg [31:0] reg_len;			// 0x08: 전송 크기
+reg [31:0] reg_ctrl;		// 0x0C: [0] Start Doorbell, [1] Read/Write 방향
+
+/*
+ //// APB slave bus (base address : 0x00020000 ~ 0x0002FFFF, search keywords on google : "APB protocol filetype:pdf")
+	output						S_PCLK,					// slave clock output
+	output						S_PRESETn,				// slave reset (active low)
+	input						S_PSEL,					// select
+	input						S_PENABLE,				// enable
+	input						S_PWRITE,				// write enable
+	input	[15:0]				S_PADDR,				// address
+	input	[31:0]				S_PWDATA,				// write data
+	output	[31:0]				S_PRDATA,				// read data
+	output						S_PREADY,				// ready
+	output						S_PSLVERR,				// slave error
+ */
+
+// APB 응답 기본 설정 (항상 응답 준비 완료)
 assign S_PCLK = CLK;
 assign S_PRESETn = nRST;
-assign S_PREADY = 1'b1;
-assign S_PSLVERR = 1'b0;
+assign S_PREADY = 1'b1;	// wait state 없음
+assign S_PSLVERR = 1'b0;	// 에러 없음
 
-always@(posedge CLK or negedge nRST) begin
+// AXI Master FSM으로 전달할 제어 신호
+wire	dma_start = reg_ctrl[0];		// Doorbel 펄스!
+wire 	dma_dir = reg_ctrl[1]; 			// 0: Read, 1: Write
+wire [63:0] dma_addr = {reg_addr_high, reg_addr_low}; 	// 64-bit 결합 주소
+
+
+// ============== SW -> HW (SW가 APB 주소로 쓴 데이터를 HW 레지스터에 받아 적기) =============
+// SW가 APB 버스를 통해 write  트랜잭션을 일으켰을 때 감지 (Access Phase)
+wire apb_write_strobe = S_PSEL & S_PENABLE & S_PWRITE;
+
+always @(posedge CLK or negedge nRST) begin
 	if (!nRST) begin
-		led_data = 8'h00;	// 0으로 초기화...
+		reg_addr_low <= 32'h0;
+		reg_addr_high <= 32'h0;
+		reg_len 	<= 32'h0;
+		reg_ctrl 	<= 32'h0;
 	end
-
-	if (S_PSEL && S_PENABLE && S_PWRITE) begin
-		if (S_PADDR == 16'h0000) begin
-			led_data <= S_PWDATA[7:0];
+	else begin
+		// Doorbell(bit[0])은 SW가 1을 쓰면 1클럭 동안만 유지되고 자동으로 0으로 해제 (One-Shot)
+		if (reg_ctrl[0]) begin
+			reg_ctrl[0] <= 1'b0;
 		end
 
+		// APB 버스에 쓰기 요청이 들어오면 주소 (S_PADDR)를 확인하고 데이터(S_PWDAATA)를 저장
+		if (apb_write_strobe) begin
+			case (S_PADDR[7:0])
+				8'h00:
+					reg_addr_low 	<= S_PWDATA;
+				8'h04:
+					reg_addr_high 	<= S_PWDATA;
+				8'h08:
+					reg_len 			<= S_PWDATA;
+				8'h0C:
+					reg_ctrl 		<= S_PWDATA;	// bit[0]에 1이 들어오는 순간 Doorbell!
+				default:
+					;
+			endcase
+		end
 	end
-
-	// S_PSEL, S_PENABLE 이 1이면?
 end
+
+// ================== HW -> SW ( SW가 APB 주소를 읽으려고 할 때 내보내주는 읽기 데이터) =====================
+reg [31:0] prdata_reg;
+
+always @(*) begin
+	case (S_PADDR[7:0])
+		8'h00:
+			prdata_reg = reg_addr_low;
+		8'h04:
+			prdata_reg = reg_addr_high;
+		8'h08:
+			prdata_reg = reg_len;
+		8'h0C:
+			prdata_reg = reg_ctrl;
+		8'h10:
+			prdata_reg = {INTR, 31'h0}; // bit[31]로 인터럽트 상태 알려줌
+		default:
+			prdata_reg = 32'h0;
+	endcase
+end
+
+assign S_PRDATA = prdata_reg;
 
 
 // 기본 출력 핀 제어
@@ -182,8 +250,10 @@ localparam V_BP     = 12;
 localparam V_TOTAL  = V_ACTIVE + V_FP + V_SYNC + V_BP; // 292
 
 // 가로/세로 위치 카운터
-reg [9:0] h_cnt;
-reg [9:0] v_cnt;
+reg [9:
+	 0] h_cnt;
+reg [9:
+	 0] v_cnt;
 
 always @(posedge CLK or negedge nRST) begin   // clk이 0 -> 1로 올라가는 시점이나, 리셋 신호가 1 -> 0으로 떨어지는 시점에만 실행되는 로직
 	if (!nRST) begin
