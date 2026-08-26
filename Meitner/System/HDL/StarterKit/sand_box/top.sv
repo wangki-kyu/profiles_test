@@ -231,6 +231,155 @@ end
 
 assign S_PRDATA = prdata_reg;
 
+// ============== AXI 시작 =======================
+
+// ==============================================
+// 1. AXI4 Master FSM 상태 및 신호 정의
+// ==============================================
+localparam S_IDLE = 2'd0;
+localparam S_ADDR = 2'd1;
+localparam S_DATA = 2'd2;
+localparam S_DONE = 2'd3;
+
+reg [1:
+	 0] state;
+reg [7:
+	 0] xfer_cnt;	// 전송 카운트
+
+// AXI Master 고정 출력 포트 설정 (128-bit Narrow/Burst 설정)
+assign M_ACLK = CLK;
+assign M_ARESETn = nRST;
+
+// AXI 기본 속성 고정 (INCR 버스트, 128-bit = 16bytes = size 4)
+assign M_AWID    = 1'b0;
+assign M_AWSIZE  = 3'b100; // 128-bit (16 Bytes)
+assign M_AWBURST = 2'b01;  // INCR mode
+assign M_AWLOCK  = 1'b0;
+assign M_AWCACHE = 4'b0011;
+assign M_AWPROT  = 3'b000;
+assign M_AWREGION= 4'h0;
+assign M_AWQOS   = 4'h0;
+
+assign M_ARID    = 1'b0;
+assign M_ARSIZE  = 3'b100; // 128-bit (16 Bytes)
+assign M_ARBURST = 2'b01;  // INCR mode
+assign M_ARLOCK  = 1'b0;
+assign M_ARCACHE = 4'b0011;
+assign M_ARPROT  = 3'b000;
+
+// Write Response Always Ready
+assign M_BREADY = 1'b1;
+
+
+// ==============================================
+// 2. AXI4 Master FSM (주소 & 데이터 전송 제어)
+// ==============================================
+reg			intr_reg;
+reg [31:
+	 0] 	awaddr_reg, araddr_reg;
+reg [7:
+	 0]	len_reg;
+
+always @(posedge CLK or negedge nRST) begin
+	if (!nRST) begin
+		state      <= S_IDLE;
+		xfer_cnt   <= 8'd0;
+		intr_reg   <= 1'b0;
+		awaddr_reg <= 32'd0;
+		araddr_reg <= 32'd0;
+		len_reg    <= 8'd0;
+	end
+	else begin
+		intr_reg <= 1'b0;
+
+		case (state)
+			// ---------------------------------------------
+			// S_IDLE: Doorbell 대기
+			// ---------------------------------------------
+			S_IDLE: begin
+				xfer_cnt <= 8'd0;
+				if (dma_start) begin
+					len_reg <= reg_len[7:0] - 1'b1; // AxLen = Burst Length - 1
+					awaddr_reg <= dma_addr[31:0];	// Target Address
+					araddr_reg <= dma_addr[31:0];	//
+					state 		<= S_ADDR;
+				end
+			end
+			// ---------------------------------------------
+			// S_ADDR: AXI 주소 채널 Handshake 대기
+			// ---------------------------------------------
+			S_ADDR: begin
+				if (dma_dir) begin // write 데이터 전송
+					if (M_AWVALID && M_AWREADY)
+						state <= S_DATA;
+				end
+				else begin
+					if (M_ARVALID && M_ARREADY)
+						state <= S_DATA;
+				end
+			end
+			// ---------------------------------------------
+			// S_DATA: 128-bit 버스트 데이터 전송
+			// ---------------------------------------------
+			S_DATA: begin
+				if (dma_dir) begin // Write
+					if (M_WVALID && M_WREADY) begin
+						if (xfer_cnt == len_reg)
+							state <= S_DONE;
+						else
+							xfer_cnt <= xfer_cnt + 1'b1;
+					end
+				end
+				else begin 			// Read 데이터 수신
+					if (M_RVALID && M_RREADY) begin
+						if (M_RVALID && M_RREADY) begin
+							if (M_RLAST)
+								state <= S_DONE;
+							else
+								xfer_cnt <= xfer_cnt + 1'b1;
+						end
+					end
+				end
+			end
+			// ---------------------------------------------
+			// S_DONE: DMA 완료 및 인터럽트 펄스 발생
+			// ---------------------------------------------
+			S_DONE: begin
+				intr_reg <= 1'b1;	// 1클럭 동안 인터럽트 펄스!
+				state <= S_IDLE;
+			end
+			default:
+				;
+
+		endcase
+	end
+end
+
+//==============================================================================
+// 3. AXI 버스 출력 신호 매핑 (Handshake 조건연산)
+//==============================================================================
+// Write 주소 채널
+assign M_AWADDR  = awaddr_reg;
+assign M_AWLEN   = len_reg;
+assign M_AWVALID = (state == S_ADDR) && dma_dir;
+
+// Read 주소 채널
+assign M_ARADDR  = araddr_reg;
+assign M_ARLEN   = len_reg;
+assign M_ARVALID = (state == S_ADDR) && (!dma_dir);
+
+// Write 데이터 채널 (임시 테스트 데이터: 카운터 패턴 128비트)
+assign M_WVALID  = (state == S_DATA) && dma_dir;// 수정 코드:
+assign M_WDATA = {4{32'hABCD0000 | {24'd0, xfer_cnt}}};
+assign M_WSTRB   = 16'hFFFF;                     // 16바이트 모두 유효
+assign M_WLAST   = (state == S_DATA) && dma_dir && (xfer_cnt == len_reg);
+
+// Read 데이터 채널 준비 신호
+assign M_RREADY  = (state == S_DATA) && (!dma_dir);
+
+// 최종 완료 인터럽트 핀 연결
+assign INTR      = intr_reg;
+
 
 // 기본 출력 핀 제어
 assign TFT_PCLK = CLK;     // 10MHz 픽셀 클럭 전달
