@@ -31,10 +31,31 @@
 // OF SUCH DAMAGE.
 //
 // Title : Testbench
-// Rev.  : 8/23/2026 Sun (woojun)
+// Rev.  : 8/29/2026 Sat (woojun)
 //================================================================================
 #include "Testbench.h"
 #include <conio.h>
+
+#define WIDTH				  480
+#define HEIGHT				  272
+#define TOTAL_PIXELS		  (WIDTH * HEIGHT)
+
+#define RED_XRGB8888		  0x00FF0000
+
+#define REG_APB_BASE_ADDR	  0x20000
+#define REG_APB_BUF_BASE_ADDR 0x20000
+
+void fill_red_image(uint32_t *fb_ptr)
+{
+	for (int i = 0; i < TOTAL_PIXELS; i++) {
+		fb_ptr[i] = RED_XRGB8888;
+	}
+}
+
+// 시나리오
+// 1. dram영역에 direct로 빨간색 픽셀을 전체 픽셀 개수만큼 채운다.
+// 2. hw영역에서 dram -> TFT buffer로 옮기는 작업을 한다.
+// 3. 화면에 빨간색으로 표시되는지 확인한다.
 
 class Testbench : public TestbenchFramework
 {
@@ -51,9 +72,19 @@ class Testbench : public TestbenchFramework
 		printf("Press 'ESC' key to exit.\n");
 		fflush(stdout);
 
-		m_pDDK->RegWrite(0x20000, 255);
+		// red pixel(24-bit) 480 * 272 * (4byte) 만큼 밀어넣을 수 있나? 522,240 byte = 510kb
+		// 총 사이즈가 128바이트?
+		uint32_t *dram_buf = (uint32_t *)0x80000000;
+		fill_red_image(dram_buf);
 
-		getchar();
+		// 1. 프레임버퍼 시작 주소 설정 (LOW만 작성 가능)
+		m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x00, 0x80000000);
+		// 2. 길이 설정
+		m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x08, TOTAL_PIXELS * 4);
+		// 3. ctrl trigger
+		m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x0C, 0x00000001);
+
+		m_pDDK->RegWrite(REG_APB_BASE_ADDR, 255);
 
 		while (GetKeyState(VK_ESCAPE) >= 0) Sleep(100);
 
