@@ -31,7 +31,7 @@
 // OF SUCH DAMAGE.
 //
 // Title : Testbench
-// Rev.  : 8/29/2026 Sat (woojun)
+// Rev.  : 8/30/2026 Sun (woojun)
 //================================================================================
 #include "Testbench.h"
 #include <conio.h>
@@ -45,10 +45,10 @@
 #define REG_APB_BASE_ADDR	  0x20000
 #define REG_APB_BUF_BASE_ADDR 0x20000
 
-void fill_red_image(uint32_t *fb_ptr)
+void fill_red_image(uint64_t fb_ptr, DDK *pDDK)
 {
 	for (int i = 0; i < TOTAL_PIXELS; i++) {
-		fb_ptr[i] = RED_XRGB8888;
+		pDDK->RegWrite(fb_ptr + (4 * i), RED_XRGB8888);
 	}
 }
 
@@ -59,34 +59,60 @@ void fill_red_image(uint32_t *fb_ptr)
 
 class Testbench : public TestbenchFramework
 {
+private:
+	DDKMemory *m_pBuff;
+
+public:
 	virtual bool OnInitialize(void)
 	{
 		printf("Current system : %s\n", m_pDDK->GetSystemDescription());
+		m_pBuff = CreateDDKMemoryEx(480 * 272 * 4, 32, 0x80000000); // 8KB, 256bit alignment
 		return CheckSimulation("FPGA Starter Kit");
 	}
 
-	virtual void OnRelease(void) {}
+	virtual void OnRelease(void)
+	{
+		printf("finish test OnRelease\n");
+		SAFE_RELEASE(m_pBuff);
+	}
 
 	virtual bool OnTestBench(void)
 	{
 		printf("Press 'ESC' key to exit.\n");
 		fflush(stdout);
 
+		printf(
+			"m_pBuffer virtual addr: 0x%p, physical addr: 0x%llX\n, byte size: %llu", m_pBuff->Virtual(), m_pBuff->Physical(),
+			m_pBuff->ByteSize());
+
 		// red pixel(24-bit) 480 * 272 * (4byte) 만큼 밀어넣을 수 있나? 522,240 byte = 510kb
 		// 총 사이즈가 128바이트?
-		uint32_t *dram_buf = (uint32_t *)0x80000000;
-		fill_red_image(dram_buf);
+		// uint32_t *dram_buf = (uint32_t *)0x80000000;
+		// fill_red_image(0x80000000, m_pDDK);
+		uint32_t *pBuf = (uint32_t *)m_pBuff->Virtual();
+		for (size_t i = 0; i < TOTAL_PIXELS; i++) {
+			pBuf[i] = RED_XRGB8888;
+		}
+		m_pBuff->Flush();
 
 		// 1. 프레임버퍼 시작 주소 설정 (LOW만 작성 가능)
-		m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x00, 0x80000000);
+		m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x00, m_pBuff->Physical());
 		// 2. 길이 설정
 		m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x08, TOTAL_PIXELS * 4);
 		// 3. ctrl trigger
 		m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x0C, 0x00000001);
 
-		m_pDDK->RegWrite(REG_APB_BASE_ADDR, 255);
+		// m_pDDK->RegWrite(REG_APB_BASE_ADDR, 255);
 
-		while (GetKeyState(VK_ESCAPE) >= 0) Sleep(100);
+		// 입력 버퍼 비우기
+		fflush(stdin);
+
+		// Enter 키를 누를 때까지 블로킹 대기
+		getchar();
+
+		printf("\n[System] Exiting testbench...\n");
+
+		// while (GetKeyState(VK_ESCAPE) >= 0) Sleep(100);
 
 		return true;
 	}
@@ -102,6 +128,8 @@ int main(int argc, char **argv)
 	} else {
 		printf("Initialization is failed.\n");
 	}
+
+	printf("finish test\n");
 
 	tb.Release();
 }

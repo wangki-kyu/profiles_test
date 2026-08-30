@@ -31,7 +31,7 @@
 // OF SUCH DAMAGE.
 //
 // Title : Virtual FPGA Starter Kit
-// Rev.  : 8/29/2026 Sat (woojun)
+// Rev.  : 8/30/2026 Sun (woojun)
 //================================================================================
 `timescale 1ns/1ns
 `include "template/StarterKit/includes.svh"
@@ -374,14 +374,56 @@ assign M_WDATA = {4{32'hABCD0000 | {24'd0, xfer_cnt}}};
 assign M_WSTRB   = 16'hFFFF;                     // 16바이트 모두 유효
 assign M_WLAST   = (state == S_DATA) && dma_dir && (xfer_cnt == len_reg);
 
+// AXI Read Ready 신호: FIFO가 Full이 아닐 때만 수신 가능
 // Read 데이터 채널 준비 신호
-assign M_RREADY  = (state == S_DATA) && (!dma_dir);
+assign M_RREADY  = (state == S_DATA) && (!dma_dir) && !fifo_full;
 
 // 최종 완료 인터럽트 핀 연결
 assign INTR      = intr_reg;
 
 // =======================================================================================
-// TFT Display 출력 
+// FIFO 및 Pixel Buffer 관련 신호 정의
+// =======================================================================================
+wire		fifo_full;
+wire		fifo_empty;
+wire		fifo_wr_en;
+wire		fifo_rd_en;
+
+wire [127:
+	  0]	fifo_din;
+wire [31:
+	  0]		pixel_data;	// FIFO에서 읽어온 32-bit 픽셀 데이터 (XRGB8888)
+
+// AXI4 Read Data가 유효할 때 FIFO에 128-bit Push
+assign fifo_wr_en = (state == S_DATA) && (!dma_dir) && M_RVALID && M_RREADY;
+assign fifo_din	= M_RDATA;
+
+// TFT display의 Data Enable(TFT_DE)이 High일 때 FIFO에서 픽셀 Read (32-bit)
+assign fifo_rd_en = TFT_DE && !fifo_empty;
+
+// =======================================================================================
+// Pixel Stream Converter (128-bit Width -> 32-bit Width Converter & FIFO)
+// =======================================================================================
+// AXI의 128-bit 비트 폭을 32-bit TFT 픽셀 비트 폭으로 변환하는 Sync FIFO
+pixel_fifo_128_to_32 u_pixel_fifo (
+	.clk        (CLK),
+	.rst_n      (nRST),
+
+	// Write Interface (128-bit AXI Side)
+	.wr_en      (fifo_wr_en),
+	.din        (fifo_din),
+	.full       (fifo_full),
+
+	// Read Interface (32-bit Display Side)
+	.rd_en      (fifo_rd_en),
+	.dout       (pixel_data),     // [31:0] XRGB8888
+	.empty      (fifo_empty)
+);
+
+
+
+// =======================================================================================
+// TFT Display 출력
 // =======================================================================================
 
 
@@ -455,4 +497,90 @@ else begin
 end
 end*/
 
+endmodule
+
+
+// pixel_fifo_128_to_32
+module pixel_fifo_128_to_32 (
+	input		clk,
+	input		rst_n,
+
+	// Write side (128-bit)
+	input		wr_en,
+	input	[127:0] din,
+	output		full,
+
+	// Read side (32-bit)
+	input		rd_en,
+	output	[31:0]	dout,
+	output		empty
+);
+// Depth = 64개의 128-bit 슬롯 (총 256개 픽셀 저장 가능)
+reg [127:
+	 0] mem [0:
+			 63];
+reg [5:
+	 0]	wr_ptr;
+reg [7:
+	 0]	rd_ptr;		// 32-bit 단위 인덱싱을 위한 Pointer
+reg [8:
+	 0]	count;		// 32-bit 단위 잔여 데이터 개수
+
+assign full = (count >= 9'd252);	// overflow 방지 safety margin
+assign empty = (count == 9'd0);
+
+
+// 32-bit 데이터 Muxing (Lower Byte / Pixel First)
+wire [127:
+	  0] current_word = mem[rd_ptr[7:2]];
+reg  [31:
+	  0]  dout_reg;
+
+always @(*) begin
+	case (rd_ptr[1:0])
+		2'b00:
+			dout_reg = current_word[31:0];
+		2'b01:
+			dout_reg = current_word[63:32];
+		2'b10:
+			dout_reg = current_word[95:64];
+		2'b11:
+			dout_reg = current_word[127:96];
+	endcase
+end
+
+assign dout = dout_reg;
+
+// Write & Read Pointer / Counter logic
+always @(posedge clk or negedge rst_n) begin
+	if (!rst_n) begin
+		wr_ptr <= 6'd0;
+		rd_ptr <= 8'd0;
+		count  <= 9'd0;
+	end
+	else begin
+		// Write (128-bit = 4 Pixels 추가)
+		if (wr_en && !full) begin
+			mem[wr_ptr] <= din;
+			wr_ptr      <= wr_ptr + 1'b1;
+		end
+
+		// Read (32-bit = 1 Pixel 소비)
+		if (rd_en && !empty) begin
+			rd_ptr <= rd_ptr + 1'b1;
+		end
+
+		// Counter Update
+		case ({ (wr_en && !full), (rd_en && !empty) })
+			2'b10:
+				count <= count + 9'd4; // Write만 발생
+			2'b01:
+				count <= count - 9'd1; // Read만 발생
+			2'b11:
+				count <= count + 9'd3; // Write(+4) & Read(-1) 동시에 발생
+			default:
+				;
+		endcase
+	end
+end
 endmodule
