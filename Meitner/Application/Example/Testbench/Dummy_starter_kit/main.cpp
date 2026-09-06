@@ -91,9 +91,10 @@ public:
          pBuf[i] = RED_XRGB8888;
       }
 
-      for (size_t i = 0; i < 270; i++) {
-         pBuf[i + (i * 480)] = 0xFFFFFFFF;
-      }
+      // 대각선은 애니메이션 막대가 지나가며 지워버리므로 잠시 비활성화
+      // for (size_t i = 0; i < 270; i++) {
+      //    pBuf[i + (i * 480)] = 0xFFFFFFFF;
+      // }
 
       m_pBuff->Flush();
 
@@ -110,10 +111,31 @@ public:
       // 입력 버퍼 비우기
       fflush(stdin);
 
-      // Enter 키를 누를 때까지 블로킹 대기
-      printf("\n[System] Press ESC key to stop...\n");
+      // 애니메이션: 빨간 배경 위에서 흰 세로 막대가 오른쪽으로 흘러간다.
+      // HW는 그대로 두고, SW가 프레임 사이에 DRAM 내용만 바꿔치기하면 화면이 움직인다.
+      // (단일 버퍼 방식: 티어링 가능성은 있지만 변화량이 작아 데모로는 충분)
+      const int BAR_W = 8;   // 막대 폭 (픽셀)
+      const int STEP  = 4;   // 프레임당 이동량 (픽셀)
+      int       bar_x = 0;
 
-      while (GetKeyState(VK_ESCAPE) >= 0) Sleep(100);
+      printf("\n[System] Animating... Press ESC key to stop.\n");
+
+      while (GetKeyState(VK_ESCAPE) >= 0) {
+         int next_x = (bar_x + STEP) % WIDTH;
+
+         // 바뀐 부분만 다시 그린다 — 전체 130,560픽셀을 매번 쓰면 시뮬레이션이 느려짐
+         for (int y = 0; y < HEIGHT; y++) {
+            uint32_t *pLine = pBuf + y * WIDTH;
+            for (int i = 0; i < BAR_W; i++)
+               pLine[(bar_x + i) % WIDTH] = RED_XRGB8888;   // 이전 막대 지우기
+            for (int i = 0; i < BAR_W; i++)
+               pLine[(next_x + i) % WIDTH] = 0xFFFFFFFF;    // 새 위치에 막대
+         }
+         bar_x = next_x;
+
+         m_pBuff->Flush();   // 캐시 → DRAM 반영. 이게 없으면 HW는 옛 그림만 읽는다.
+         Sleep(33);          // SW 갱신 약 30fps (HW 리프레시 ~51.7fps와는 별개의 박자)
+      }
 
       return true;
    }
