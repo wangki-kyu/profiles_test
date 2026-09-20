@@ -45,6 +45,10 @@
 #define REG_APB_BASE_ADDR	  0x20000
 #define REG_APB_BUF_BASE_ADDR 0x20000
 
+// video
+#define FRAME_BYTES			  (TOTAL_PIXELS * 4)
+#define VIDEO_PATH			  "E:\\Project\\Profiles\\Meitner\\Application\\Example\\Testbench\\Dummy_starter_kit\\test.raw"
+
 void fill_red_image(uint64_t fb_ptr, DDK *pDDK)
 {
 	for (int i = 0; i < TOTAL_PIXELS; i++) {
@@ -61,24 +65,79 @@ class Testbench : public TestbenchFramework
 {
 private:
 	DDKMemory *m_pBuff[2];
+	FILE	  *m_fp;
+	uint64_t   m_frame_no;
 
-public:
-	virtual bool OnInitialize(void)
+	bool	   LoadFrame(int idx)
 	{
-		printf("Current system : %s\n", m_pDDK->GetSystemDescription());
-		m_pBuff[0] = CreateDDKMemory(480 * 272 * 4, 4096 / 8);
-		m_pBuff[1] = CreateDDKMemory(480 * 272 * 4, 4096 / 8);
-		return CheckSimulation("FPGA Starter Kit");
+		void *p = m_pBuff[idx]->Virtual();
+
+		if (fread(p, 1, FRAME_BYTES, m_fp) != FRAME_BYTES) {
+			rewind(m_fp); // EOF -> 처음부터 다시
+			m_frame_no = 0;
+
+			if (fread(p, 1, FRAME_BYTES, m_fp) != FRAME_BYTES) {
+				printf("[ERR] 프레임 읽기 실패, 파일 크긱가 %d의 배수인지 확인하세요.\n", FRAME_BYTES);
+				return false;
+			}
+		}
+
+		m_pBuff[idx]->Flush();
+		m_frame_no++;
+		return true;
 	}
 
-	virtual void OnRelease(void)
+	void VideoTest()
 	{
-		printf("finish test OnRelease\n");
-		SAFE_RELEASE(m_pBuff[0]);
-		SAFE_RELEASE(m_pBuff[1]);
+		m_fp = fopen(VIDEO_PATH, "rb");
+
+		if (!m_fp) {
+			printf("[ERR] %s 를 열 수 없습니다.\n", VIDEO_PATH);
+			return;
+		}
+
+		// 파일이 제대로 만들어졌는지 검증 (크기가 FRAME_BYTES의 배수여야 함)
+		fseek(m_fp, 0, SEEK_END);
+		long fsize = ftell(m_fp);
+		rewind(m_fp);
+
+		printf("video: %ld bytes, %ld frames", fsize, fsize / FRAME_BYTES);
+
+		if (fsize % FRAME_BYTES)
+			printf(" <- 나머지 %ld bytes! 해상도나 -pix_fmt 확인 필요", fsize % FRAME_BYTES);
+
+		printf("\n");
+
+		if (fsize < FRAME_BYTES) {
+			printf("[ERR] 프레임이 하나도 안 들어있습니다.\n");
+			return;
+		}
+
+		if (!LoadFrame(0))
+			return;
+
+		m_pDDK->RegWrite(REG_APB_BUF_BASE_ADDR + 0x10, m_pBuff[0]->Physical());
+		m_pDDK->RegWrite(REG_APB_BUF_BASE_ADDR + 0x08, 1); // video enable
+
+		int back = 1; // buf[0]은 이미 화면에 올라갔으므로 다음 차례는 buf[1]
+
+		while (GetKeyState(VK_ESCAPE) >= 0) {
+			if (!LoadFrame(back)) // 예비 버퍼 채워주기
+				break;
+
+			// 다음 버퍼 예약
+			m_pDDK->RegWrite(REG_APB_BUF_BASE_ADDR + 0x10, m_pBuff[back]->Physical());
+
+			uint32_t frame_cnt = m_pDDK->RegRead(REG_APB_BASE_ADDR + 0x14);
+			while (m_pDDK->RegRead(REG_APB_BASE_ADDR + 0x14) == frame_cnt) {
+			}
+			back ^= 1;
+		}
+
+		printf("stopped at frame %llu\n", m_frame_no);
 	}
 
-	virtual bool OnTestBench(void)
+	void WhiteBarTest()
 	{
 		printf(
 			"m_pBuffer virtual addr: 0x%p, physical addr: 0x%llX\n, byte size: %llu", m_pBuff[0]->Virtual(), m_pBuff[0]->Physical(),
@@ -143,7 +202,31 @@ public:
 			back ^= 1;
 			bar_x = (bar_x + STEP) % WIDTH;
 		}
+	}
 
+public:
+	virtual bool OnInitialize(void)
+	{
+		printf("Current system : %s\n", m_pDDK->GetSystemDescription());
+		m_pBuff[0] = CreateDDKMemory(480 * 272 * 4, 4096 / 8);
+		m_pBuff[1] = CreateDDKMemory(480 * 272 * 4, 4096 / 8);
+		return CheckSimulation("FPGA Starter Kit");
+	}
+
+	virtual void OnRelease(void)
+	{
+		if (m_fp)
+			fclose(m_fp);
+
+		printf("finish test OnRelease\n");
+		SAFE_RELEASE(m_pBuff[0]);
+		SAFE_RELEASE(m_pBuff[1]);
+	}
+
+	virtual bool OnTestBench(void)
+	{
+		// WhiteBarTest();
+		VideoTest();
 		return true;
 	}
 };
