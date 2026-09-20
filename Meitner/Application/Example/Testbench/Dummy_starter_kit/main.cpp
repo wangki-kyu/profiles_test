@@ -31,25 +31,25 @@
 // OF SUCH DAMAGE.
 //
 // Title : Testbench
-// Rev.  : 9/3/2026 Thu (Woojun)
+// Rev.  : 9/20/2026 Sun (woojun)
 //================================================================================
 #include "Testbench.h"
 #include <conio.h>
 
-#define WIDTH              480
-#define HEIGHT              272
-#define TOTAL_PIXELS        (WIDTH * HEIGHT)
+#define WIDTH				  480
+#define HEIGHT				  272
+#define TOTAL_PIXELS		  (WIDTH * HEIGHT)
 
-#define RED_XRGB8888        0x00FF0000
+#define RED_XRGB8888		  0x00FF0000
 
-#define REG_APB_BASE_ADDR     0x20000
+#define REG_APB_BASE_ADDR	  0x20000
 #define REG_APB_BUF_BASE_ADDR 0x20000
 
 void fill_red_image(uint64_t fb_ptr, DDK *pDDK)
 {
-   for (int i = 0; i < TOTAL_PIXELS; i++) {
-      pDDK->RegWrite(fb_ptr + (4 * i), RED_XRGB8888);
-   }
+	for (int i = 0; i < TOTAL_PIXELS; i++) {
+		pDDK->RegWrite(fb_ptr + (4 * i), RED_XRGB8888);
+	}
 }
 
 // 시나리오
@@ -60,99 +60,106 @@ void fill_red_image(uint64_t fb_ptr, DDK *pDDK)
 class Testbench : public TestbenchFramework
 {
 private:
-   DDKMemory *m_pBuff;
+	DDKMemory *m_pBuff[2];
 
 public:
-   virtual bool OnInitialize(void)
-   {
-      printf("Current system : %s\n", m_pDDK->GetSystemDescription());
-      m_pBuff = CreateDDKMemory(480 * 272 * 4, 4096 / 8);
-      return CheckSimulation("FPGA Starter Kit");
-   }
+	virtual bool OnInitialize(void)
+	{
+		printf("Current system : %s\n", m_pDDK->GetSystemDescription());
+		m_pBuff[0] = CreateDDKMemory(480 * 272 * 4, 4096 / 8);
+		m_pBuff[1] = CreateDDKMemory(480 * 272 * 4, 4096 / 8);
+		return CheckSimulation("FPGA Starter Kit");
+	}
 
-   virtual void OnRelease(void)
-   {
-      printf("finish test OnRelease\n");
-      SAFE_RELEASE(m_pBuff);
-   }
+	virtual void OnRelease(void)
+	{
+		printf("finish test OnRelease\n");
+		SAFE_RELEASE(m_pBuff[0]);
+		SAFE_RELEASE(m_pBuff[1]);
+	}
 
-   virtual bool OnTestBench(void)
-   {
-      printf(
-         "m_pBuffer virtual addr: 0x%p, physical addr: 0x%llX\n, byte size: %llu", m_pBuff->Virtual(), m_pBuff->Physical(),
-         m_pBuff->ByteSize());
+	virtual bool OnTestBench(void)
+	{
+		printf(
+			"m_pBuffer virtual addr: 0x%p, physical addr: 0x%llX\n, byte size: %llu", m_pBuff[0]->Virtual(), m_pBuff[0]->Physical(),
+			m_pBuff[0]->ByteSize());
 
-      // red pixel(24-bit) 480 * 272 * (4byte) 만큼 밀어넣을 수 있나? 522,240 byte = 510kb
-      // 총 사이즈가 128바이트?
-      // uint32_t *dram_buf = (uint32_t *)0x80000000;
-      // fill_red_image(0x80000000, m_pDDK);
-      uint32_t *pBuf = (uint32_t *)m_pBuff->Virtual();
-      for (size_t i = 0; i < TOTAL_PIXELS; i++) {
-         pBuf[i] = RED_XRGB8888;
-      }
+		// red pixel(24-bit) 480 * 272 * (4byte) 만큼 밀어넣을 수 있나? 522,240 byte = 510kb
+		// 총 사이즈가 128바이트?
+		// uint32_t *dram_buf = (uint32_t *)0x80000000;
+		// fill_red_image(0x80000000, m_pDDK);
+		uint32_t *pBuf = (uint32_t *)m_pBuff[0]->Virtual();
+		for (size_t i = 0; i < TOTAL_PIXELS; i++) {
+			pBuf[i] = RED_XRGB8888;
+		}
 
-      // 대각선은 애니메이션 막대가 지나가며 지워버리므로 잠시 비활성화
-      // for (size_t i = 0; i < 270; i++) {
-      //    pBuf[i + (i * 480)] = 0xFFFFFFFF;
-      // }
+		// 대각선은 애니메이션 막대가 지나가며 지워버리므로 잠시 비활성화
+		// for (size_t i = 0; i < 270; i++) {
+		//    pBuf[i + (i * 480)] = 0xFFFFFFFF;
+		// }
 
-      m_pBuff->Flush();
+		m_pBuff[0]->Flush();
 
-      // 1. 프레임버퍼 시작 주소 설정 (LOW만 작성 가능)
-      m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x00, m_pBuff->Physical());
-      m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x04, m_pBuff->Physical() >> 32);
-      // 2. 길이 설정
-      m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x08, 1);
-      // 3. ctrl trigger
-      // m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x0C, 0x00000001);
+		// 1. 프레임버퍼 시작 주소 설정 (LOW만 작성 가능)
+		m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x10, m_pBuff[0]->Physical());
+		// m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x04, m_pBuff[0]->Physical() >> 32);
+		//  2. 길이 설정
+		m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x08, 1);
+		// 3. ctrl trigger
+		// m_pDDK->RegWrite(REG_APB_BASE_ADDR + 0x0C, 0x00000001);
 
-      // m_pDDK->RegWrite(REG_APB_BASE_ADDR, 255);
+		// m_pDDK->RegWrite(REG_APB_BASE_ADDR, 255);
 
-      // 입력 버퍼 비우기
-      fflush(stdin);
+		// 입력 버퍼 비우기
+		fflush(stdin);
 
-      // 애니메이션: 빨간 배경 위에서 흰 세로 막대가 오른쪽으로 흘러간다.
-      // HW는 그대로 두고, SW가 프레임 사이에 DRAM 내용만 바꿔치기하면 화면이 움직인다.
-      // (단일 버퍼 방식: 티어링 가능성은 있지만 변화량이 작아 데모로는 충분)
-      const int BAR_W = 8;   // 막대 폭 (픽셀)
-      const int STEP  = 4;   // 프레임당 이동량 (픽셀)
-      int       bar_x = 0;
+		// 애니메이션: 빨간 배경 위에서 흰 세로 막대가 오른쪽으로 흘러간다.
+		// HW는 그대로 두고, SW가 프레임 사이에 DRAM 내용만 바꿔치기하면 화면이 움직인다.
+		// (단일 버퍼 방식: 티어링 가능성은 있지만 변화량이 작아 데모로는 충분)
+		const int BAR_W = 8; // 막대 폭 (픽셀)
+		const int STEP	= 4; // 프레임당 이동량 (픽셀)
+		int		  bar_x = 0;
+		int		  back	= 0;
 
-      printf("\n[System] Animating... Press ESC key to stop.\n");
+		printf("\n[System] Animating... Press ESC key to stop.\n");
 
-      while (GetKeyState(VK_ESCAPE) >= 0) {
-         int next_x = (bar_x + STEP) % WIDTH;
+		while (GetKeyState(VK_ESCAPE) >= 0) {
+			uint32_t *pWhitebuf = (uint32_t *)m_pBuff[back]->Virtual();
 
-         // 바뀐 부분만 다시 그린다 — 전체 130,560픽셀을 매번 쓰면 시뮬레이션이 느려짐
-         for (int y = 0; y < HEIGHT; y++) {
-            uint32_t *pLine = pBuf + y * WIDTH;
-            for (int i = 0; i < BAR_W; i++)
-               pLine[(bar_x + i) % WIDTH] = RED_XRGB8888;   // 이전 막대 지우기
-            for (int i = 0; i < BAR_W; i++)
-               pLine[(next_x + i) % WIDTH] = 0xFFFFFFFF;    // 새 위치에 막대
-         }
-         bar_x = next_x;
+			for (int y = 0; y < HEIGHT; y++) { // 272번 돌아간다. 0 ~ 271 까지
+				uint32_t *pLine = pWhitebuf + y * WIDTH;
+				for (int x = 0; x < WIDTH; x++) pLine[x] = RED_XRGB8888;
+				for (int i = 0; i < BAR_W; i++) pLine[(bar_x + i) % WIDTH] = 0xFFFFFFFF;
+			}
 
-         m_pBuff->Flush();   // 캐시 → DRAM 반영. 이게 없으면 HW는 옛 그림만 읽는다.
-         Sleep(33);          // SW 갱신 약 30fps (HW 리프레시 ~51.7fps와는 별개의 박자)
-      }
+			m_pBuff[back]->Flush();
+			m_pDDK->RegWrite(REG_APB_BUF_BASE_ADDR + 0x10, m_pBuff[back]->Physical());
 
-      return true;
-   }
+			uint32_t frame_cnt = m_pDDK->RegRead(REG_APB_BUF_BASE_ADDR + 0x14);
+			while (m_pDDK->RegRead(REG_APB_BUF_BASE_ADDR + 0x14) == frame_cnt) {
+				/* spin */
+			}
+
+			back ^= 1;
+			bar_x = (bar_x + STEP) % WIDTH;
+		}
+
+		return true;
+	}
 };
 
 int main(int argc, char **argv)
 {
-   Testbench tb;
+	Testbench tb;
 
-   if (tb.Initialize()) {
-      if (!tb.DoTestbench())
-         printf("Testbench is failed.\n");
-   } else {
-      printf("Initialization is failed.\n");
-   }
+	if (tb.Initialize()) {
+		if (!tb.DoTestbench())
+			printf("Testbench is failed.\n");
+	} else {
+		printf("Initialization is failed.\n");
+	}
 
-   printf("finish test\n");
+	printf("finish test\n");
 
-   tb.Release();
+	tb.Release();
 }
