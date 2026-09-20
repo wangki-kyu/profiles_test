@@ -33,6 +33,13 @@
 // Title : Testbench
 // Rev.  : 9/20/2026 Sun (woojun)
 //================================================================================
+/* ffmpeg으로 raw 영상 만들기
+ * # Dummy_starter_kit/make_raw.sh
+ffmpeg -i "$1" -t "${2:-3}" -r 32 \
+  -vf "scale=480:272:force_original_aspect_ratio=decrease,pad=480:272:(ow-iw)/2:(oh-ih)/2" \
+  -pix_fmt bgra -f rawvideo -y test.raw
+./make_raw.sh tennis.mp4 5*/
+
 #include "Testbench.h"
 #include <conio.h>
 
